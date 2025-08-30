@@ -155,11 +155,17 @@ The application includes a secure authentication system. For demo purposes:
 #### Dashboard Overview
 Upon successful login, users access the main dashboard featuring:
 
+![Main Dashboard](screenshots/main-dashboard.png)
+*The main application dashboard with modern glass-morphism design and real-time data*
+
 1. **Market Overview Panel**
    - Real-time price updates
    - Daily change indicators
    - Volume information
    - Multiple stock comparison
+
+![Market Overview](screenshots/market-overview.png)
+*Comprehensive market overview showing key performance indicators across multiple stocks*
 
 2. **Technical Analysis Section**
    - Interactive price charts
@@ -167,11 +173,17 @@ Upon successful login, users access the main dashboard featuring:
    - Technical indicator panels
    - Customizable timeframes
 
+![Technical Analysis](screenshots/technical-analysis.png)
+*Advanced technical analysis with RSI, MACD, and candlestick charts*
+
 3. **ML Prediction Module**
    - Model training interface
    - Prediction visualizations
    - Confidence intervals
    - Performance metrics
+
+![AI Predictions](screenshots/ai-predictions.png)
+*Machine learning predictions with model performance metrics and confidence intervals*
 
 ### Core Features
 

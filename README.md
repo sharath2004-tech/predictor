@@ -100,20 +100,20 @@ Advanced Stock Predictor AI is a sophisticated machine learning-powered web appl
 ## 🎨 **Application Screenshots**
 
 ### 🏠 **Main Dashboard**
-![Main Dashboard](screenshot-placeholder-main.png)
+![Main Dashboard](screenshots/main-dashboard.png)
 *Real-time stock metrics with animated gradient background and glass-morphism design*
 
-### 📊 **Technical Analysis**
-![Technical Analysis](screenshot-placeholder-technical.png) 
-*Interactive candlestick charts with moving averages and volume analysis*
+### 📊 **Market Overview**
+![Market Overview](screenshots/market-overview.png)
+*Comprehensive market analysis with real-time data and key performance indicators*
+
+### 📈 **Technical Analysis**
+![Technical Analysis](screenshots/technical-analysis.png) 
+*Interactive candlestick charts with moving averages, RSI, MACD, and volume analysis*
 
 ### 🤖 **AI Predictions**
-![AI Predictions](screenshot-placeholder-ai.png)
-*Machine learning model performance comparison and future price predictions*
-
-### 📈 **RSI & MACD Analysis**
-![RSI MACD](screenshot-placeholder-indicators.png)
-*Advanced technical indicators with buy/sell signals*
+![AI Predictions](screenshots/ai-predictions.png)
+*Machine learning model performance comparison and future price predictions with confidence metrics*
 
 ## 🔧 **Configuration**
 

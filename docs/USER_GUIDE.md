@@ -67,7 +67,13 @@ Choose your analysis timeframe:
 
 ### **Step 3: Understanding the Dashboard**
 
+![Main Dashboard](../screenshots/main-dashboard.png)
+*The main dashboard showing real-time stock metrics with modern glass-morphism design*
+
 #### **🌟 Market Overview Section**
+
+![Market Overview](../screenshots/market-overview.png)
+*Comprehensive market overview with key performance indicators and real-time data*
 
 **Location:** Top of the main dashboard
 
@@ -90,6 +96,9 @@ Choose your analysis timeframe:
 ---
 
 #### **📊 Technical Analysis Section**
+
+![Technical Analysis](../screenshots/technical-analysis.png)
+*Interactive technical analysis charts with RSI, MACD, and moving averages*
 
 **Location:** Main content area after market overview
 
@@ -152,6 +161,9 @@ Choose your analysis timeframe:
 ---
 
 ### **Step 4: Machine Learning Predictions**
+
+![AI Predictions](../screenshots/ai-predictions.png)
+*AI prediction dashboard showing model performance metrics and future price forecasts*
 
 #### **🤖 ML Prediction Section**
 
