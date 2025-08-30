@@ -4,7 +4,10 @@
     "python.linting.enabled": false,
     "python.linting.pylintEnabled": false,
     "python.linting.flake8Enabled": false,
-    "python.analysis.disabled": ["unused-import", "undefined-variable"],
+    "python.analysis.disabled": [
+        "unused-import",
+        "undefined-variable"
+    ],
     "python.analysis.autoImportCompletions": true,
     "python.analysis.diagnosticMode": "workspace",
     "editor.formatOnSave": true,
