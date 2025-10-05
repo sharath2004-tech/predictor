@@ -824,21 +824,36 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         
         with st.spinner("🔮 Generating future predictions..."):
             future_predictions = predictor.predict_future(features_df, days_ahead)
-        
+
+        active_predictions = {}
         if future_predictions:
+            # Align future predictions with the set of qualified models to avoid missing entries
+            active_predictions = {
+                name: preds for name, preds in future_predictions.items() if name in qualified_models
+            }
+            if not active_predictions:
+                # Fallback: if every model was filtered out, operate on the full set
+                active_predictions = future_predictions
             # Plot future predictions
-            fig_future = plot_future_predictions(current_price, future_predictions, days_ahead)
+            fig_future = plot_future_predictions(current_price, active_predictions, days_ahead)
             st.plotly_chart(fig_future, config=PLOTLY_CONFIG)
             
             # Prediction summary with date information
             st.markdown("### 🎯 Prediction Summary")
             
             # Calculate ensemble prediction if enabled
-            if ensemble_prediction and len(future_predictions) > 1:
-                ensemble_pred = np.mean([float(pred_data['predictions'][-1]) for pred_data in future_predictions.values()])
-                
-                # Calculate ensemble confidence - now much simpler since confidence is already float
-                ensemble_confidence = np.mean([qualified_models[name]['confidence'] for name in future_predictions.keys()])
+            if ensemble_prediction and len(active_predictions) > 1:
+                ensemble_pred = np.mean([
+                    float(pred_data['predictions'][-1]) for pred_data in active_predictions.values()
+                ])
+
+                # Calculate ensemble confidence using only models that have confidence scores available
+                confidence_samples = [
+                    qualified_models[name]['confidence']
+                    for name in active_predictions.keys()
+                    if name in qualified_models and 'confidence' in qualified_models[name]
+                ]
+                ensemble_confidence = np.mean(confidence_samples) if confidence_samples else 0.0
                 
                 st.markdown(f"""
                 <div style="
@@ -861,9 +876,9 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
                 """, unsafe_allow_html=True)
             
             # Individual model predictions
-            cols = st.columns(len(future_predictions))
-            
-            for i, (name, pred_data) in enumerate(future_predictions.items()):
+            cols = st.columns(len(active_predictions))
+
+            for i, (name, pred_data) in enumerate(active_predictions.items()):
                 try:
                     # ULTRA SAFE value extraction
                     predictions_list = pred_data.get('predictions', [])
@@ -941,7 +956,15 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         best_rmse = float(best_results['test_rmse'])
         best_r2 = float(best_results['test_r2'])
         best_confidence = float(best_results['confidence'])  # Already stored as float
-        best_prediction = float(future_predictions[best_name]['predictions'][-1])
+
+        target_prediction_source = active_predictions if active_predictions else future_predictions
+        if not target_prediction_source or best_name not in target_prediction_source:
+            target_prediction_source = future_predictions
+        if not target_prediction_source or best_name not in target_prediction_source:
+            st.warning("⚠️ Unable to locate future predictions for the top model. Using current price instead.")
+            best_prediction = current_price
+        else:
+            best_prediction = float(target_prediction_source[best_name]['predictions'][-1])
         
         st.success(f"""
         🏆 **Best Performing Model: {best_name}**
@@ -958,11 +981,14 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         # Trading recommendation based on predictions
         st.markdown("### 💡 AI Trading Recommendation")
         
-        if ensemble_prediction and len(future_predictions) > 1:
+        if ensemble_prediction and len(active_predictions) > 1:
             pred_price = float(ensemble_pred)
             avg_confidence = float(ensemble_confidence)
         else:
-            pred_price = float(future_predictions[best_name]['predictions'][-1])
+            if not target_prediction_source or best_name not in target_prediction_source:
+                pred_price = current_price
+            else:
+                pred_price = float(target_prediction_source[best_name]['predictions'][-1])
             avg_confidence = float(best_results['confidence'])  # Already stored as float
         
         price_change_pct = ((pred_price - current_price) / current_price) * 100

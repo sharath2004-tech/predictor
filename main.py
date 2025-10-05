@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv, dotenv_values
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import httpx
 
 # Import our custom modules
 from login import show_login_page, is_authenticated, get_current_user, logout
@@ -20,6 +21,7 @@ from services.openrouter_client import openrouter_chat, DEFAULT_OPENROUTER_MODEL
 load_dotenv()
 
 PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
+YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
 
 # ========================
 # App Configuration
@@ -343,7 +345,7 @@ def calculate_moving_averages(prices):
 # ========================
 # Data Functions
 # ========================
-@st.cache_data
+@st.cache_data(ttl=300, show_spinner=False)
 def get_stock_data(ticker, period="1y"):
     """Fetch stock data with caching"""
     try:
@@ -355,7 +357,7 @@ def get_stock_data(ticker, period="1y"):
     except Exception:
         return pd.DataFrame()
 
-@st.cache_data
+@st.cache_data(ttl=300, show_spinner=False)
 def get_market_overview(tickers):
     """Get market overview data"""
     overview_data = []
@@ -395,6 +397,51 @@ def get_market_overview(tickers):
         except:
             continue
     return pd.DataFrame(overview_data)
+
+
+@st.cache_data(show_spinner=False)
+def search_tickers(query: str, limit: int = 12):
+    """Search Yahoo Finance for symbols matching the query."""
+    if not query or len(query) < 2:
+        return []
+
+    params = {
+        "q": query,
+        "quotesCount": limit,
+        "newsCount": 0,
+        "enableFuzzyQuery": False,
+        "quotesQueryId": "tss_match_phrase_query",
+        "multiQuoteQueryId": "multi_quote_single_token_query",
+        "enableNavLinks": False,
+        "enableEnhancedTrivialQuery": True,
+    }
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json",
+    }
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(YAHOO_SEARCH_URL, params=params, headers=headers)
+            resp.raise_for_status()
+            data = resp.json() or {}
+    except Exception:
+        return []
+
+    cleaned = []
+    for item in data.get("quotes", []) or []:
+        symbol = item.get("symbol")
+        if not symbol:
+            continue
+        name = item.get("shortname") or item.get("longname") or item.get("quoteType") or ""
+        exchange = item.get("exchangeDisplay") or item.get("exchDisp") or item.get("exchange") or ""
+        cleaned.append({
+            "symbol": symbol,
+            "name": name,
+            "exchange": exchange,
+        })
+    return cleaned
 
 
 def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
@@ -684,10 +731,52 @@ def main_app():
         
         # Stock selection
         stock = st.selectbox(
-            "📈 Select Stock", 
-            PENNY_STOCKS, 
+            "📈 Select Stock",
+            PENNY_STOCKS,
             help="Choose a penny stock to analyze"
         )
+
+        search_symbol = None
+        search_query = st.text_input(
+            "🔍 Search any global ticker",
+            help="Type at least 2 characters to search Yahoo Finance. Example: RELIANCE.NS or TSLA",
+            key="ticker_search_input"
+        )
+
+        cleaned_query = search_query.strip()
+        if len(cleaned_query) >= 2:
+            matches = search_tickers(cleaned_query, limit=15)
+            if matches:
+                options = []
+                for item in matches:
+                    name = item["name"].strip() if item.get("name") else ""
+                    exchange = item.get("exchange") or ""
+                    label_parts = [item["symbol"]]
+                    if name:
+                        label_parts.append(f"{name}")
+                    if exchange:
+                        label_parts.append(f"[{exchange}]")
+                    options.append(" · ".join(label_parts))
+
+                selected_label = st.selectbox(
+                    "Suggested matches",
+                    options,
+                    key="_search_result_select"
+                )
+                try:
+                    selected_index = options.index(selected_label)
+                    search_symbol = matches[selected_index]["symbol"]
+                except ValueError:
+                    search_symbol = matches[0]["symbol"]
+            else:
+                st.info("No matches found. Showing default list above.")
+
+        if search_symbol:
+            stock = search_symbol
+            st.markdown(
+                f"<div class='glass-card' style='margin-top: 0.5rem; text-align: center;'>Using search result: <strong>{stock}</strong></div>",
+                unsafe_allow_html=True,
+            )
         
         # Analysis options
         st.markdown("### 📊 Analysis Options")
