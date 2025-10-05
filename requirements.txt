@@ -1,5 +1,10 @@
-streamlit>=1.22.0
-pandas>=1.5.0
-numpy>=1.22.0
-scikit-learn>=1.0.0
-plotly>=5.10.0
+streamlit
+pandas
+numpy
+scikit-learn
+yfinance
+pyrebase4
+setuptools
+plotly
+httpx
+python-dotenv

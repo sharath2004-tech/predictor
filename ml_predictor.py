@@ -6,12 +6,15 @@ import numpy as np
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.model_selection import TimeSeriesSplit
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 import warnings
 warnings.filterwarnings('ignore')
+
+PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
 
 # ========================
 # Technical Indicators for Features (Fixed for 1D data)
@@ -226,6 +229,7 @@ def create_features(data):
 # ========================
 class StockPredictor:
     def __init__(self):
+        # Keep the original three models
         self.models = {
             "🌲 Random Forest": RandomForestRegressor(
                 n_estimators=200,
@@ -245,11 +249,13 @@ class StockPredictor:
             ),
             "📈 Linear Regression": LinearRegression(),
         }
-        
+
         self.scalers = {}
         self.trained_models = {}
         self.feature_importance = {}
         self.model_metrics = {}
+        # Store per-model polynomial transformers (applied after scaling)
+        self.poly_transformers = {}
     
     def prepare_data(self, features_df, target_col='close_price', test_size=0.2):
         """Prepare data for training"""
@@ -275,19 +281,34 @@ class StockPredictor:
             st.error(f"Error preparing data: {str(e)}")
             return None, None, None, None, None, None
     
-    def train_models(self, X_train, y_train, X_test, y_test, scaler, feature_columns):
-        """Train all models"""
+    def train_models(self, X_train, y_train, X_test, y_test, scaler, feature_columns, *, boost_linear=False, poly_degree=1):
+        """Train all models.
+        If boost_linear=True and poly_degree>1, applies PolynomialFeatures (after scaling) for linear-type models.
+        """
         try:
             results = {}
             
             for name, model in self.models.items():
                 with st.spinner(f"Training {name}..."):
+                    # Apply polynomial boost only to Linear Regression
+                    is_linear_family = name == "📈 Linear Regression"
+
+                    if boost_linear and poly_degree and poly_degree > 1 and is_linear_family:
+                        # Create/fetch polynomial transformer per model
+                        poly = PolynomialFeatures(degree=poly_degree, include_bias=False)
+                        X_train_used = poly.fit_transform(X_train)
+                        X_test_used = poly.transform(X_test)
+                        self.poly_transformers[name] = poly
+                    else:
+                        X_train_used = X_train
+                        X_test_used = X_test
+
                     # Train model
-                    model.fit(X_train, y_train)
+                    model.fit(X_train_used, y_train)
                     
                     # Make predictions
-                    train_pred = model.predict(X_train)
-                    test_pred = model.predict(X_test)
+                    train_pred = model.predict(X_train_used)
+                    test_pred = model.predict(X_test_used)
                     
                     # Calculate metrics
                     train_rmse = np.sqrt(mean_squared_error(y_train, train_pred))
@@ -306,7 +327,7 @@ class StockPredictor:
                         'test_actual': y_test
                     }
                     
-                    # Feature importance (for tree-based models)
+                    # Feature importance (available for tree-based models)
                     if hasattr(model, 'feature_importances_'):
                         importance_df = pd.DataFrame({
                             'feature': feature_columns,
@@ -340,8 +361,12 @@ class StockPredictor:
                 
                 # Scale features
                 latest_scaled = scaler.transform(latest_features[feature_columns].values)
-                
-                # Predict future prices
+                # Apply polynomial transform for linear-family models if it was used during training
+                if name in self.poly_transformers:
+                    poly = self.poly_transformers[name]
+                    latest_scaled = poly.transform(latest_scaled)
+
+                # Predict future prices (naive iterative approach)
                 future_predictions = []
                 current_features = latest_scaled[0].copy()
                 
@@ -349,8 +374,7 @@ class StockPredictor:
                     pred = model.predict([current_features])[0]
                     future_predictions.append(pred)
                     
-                    # Update features (simplified approach)
-                    # In practice, you'd want more sophisticated feature updating
+                    # Update features (simplified; in production, recompute feature set)
                     current_features = np.roll(current_features, 1)
                     current_features[0] = pred
                 
@@ -576,16 +600,28 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         # Sidebar controls for ML
         with st.sidebar:
             st.markdown("### 🤖 Advanced ML Settings")
-            
+
             test_size = st.slider("Test Set Size (%)", 10, 40, 20) / 100
-            
+
             # Advanced settings
             with st.expander("⚙️ Model Configuration"):
                 include_volume = st.checkbox("Include Volume Features", True)
                 include_technical = st.checkbox("Include Technical Indicators", True)
                 normalize_features = st.checkbox("Normalize Features", True)
-                ensemble_prediction = st.checkbox("Use Ensemble Prediction", True, 
-                                                help="Combine all model predictions for better accuracy")
+                ensemble_prediction = st.checkbox(
+                    "Use Ensemble Prediction",
+                    True,
+                    help="Combine all model predictions for better accuracy",
+                )
+
+            boost_linear = st.checkbox(
+                "Boost Linear Models (Poly Features)",
+                True,
+                help="Add polynomial feature terms for linear/regularized models",
+            )
+            poly_degree = st.slider(
+                "Polynomial Degree", 1, 3, 2, help="Degree of polynomial feature expansion"
+            )
         
         # Create features
         with st.spinner("🔄 Engineering features..."):
@@ -614,7 +650,10 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        models_results = predictor.train_models(X_train, y_train, X_test, y_test, scaler, feature_columns)
+        models_results = predictor.train_models(
+            X_train, y_train, X_test, y_test, scaler, feature_columns,
+            boost_linear=boost_linear, poly_degree=poly_degree
+        )
         
         progress_bar.progress(100)
         status_text.text("✅ All models trained successfully!")
@@ -746,7 +785,7 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
             
             if metrics_data:
                 metrics_df = pd.DataFrame(metrics_data)
-                st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+                st.dataframe(metrics_df, width='stretch', hide_index=True)
             else:
                 st.error("No valid metrics data to display")
                 
@@ -757,7 +796,7 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         try:
             # Model comparison chart
             fig_comparison = plot_model_comparison(qualified_models)
-            st.plotly_chart(fig_comparison, use_container_width=True)
+            st.plotly_chart(fig_comparison, config=PLOTLY_CONFIG)
         except Exception as e:
             st.error(f"Error in model comparison chart: {str(e)}")
         
@@ -765,7 +804,7 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
             # Predictions vs Actual
             st.markdown("### 📈 Predictions vs Actual Values")
             fig_predictions = plot_predictions_vs_actual(qualified_models)
-            st.plotly_chart(fig_predictions, use_container_width=True)
+            st.plotly_chart(fig_predictions, config=PLOTLY_CONFIG)
         except Exception as e:
             st.error(f"Error in predictions vs actual chart: {str(e)}")
         
@@ -774,7 +813,7 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
             fig_importance = plot_feature_importance(qualified_models)
             if fig_importance:
                 st.markdown("### 🔍 Feature Importance Analysis")
-                st.plotly_chart(fig_importance, use_container_width=True)
+                st.plotly_chart(fig_importance, config=PLOTLY_CONFIG)
         except Exception as e:
             st.error(f"Error in feature importance chart: {str(e)}")
         
@@ -789,7 +828,7 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         if future_predictions:
             # Plot future predictions
             fig_future = plot_future_predictions(current_price, future_predictions, days_ahead)
-            st.plotly_chart(fig_future, use_container_width=True)
+            st.plotly_chart(fig_future, config=PLOTLY_CONFIG)
             
             # Prediction summary with date information
             st.markdown("### 🎯 Prediction Summary")
@@ -977,6 +1016,59 @@ def show_ml_predictions(data, stock_symbol, days_ahead=7, prediction_date=None, 
         - Consider consulting with a qualified financial advisor
         - Never invest more than you can afford to lose
         """)
+
+        # Save a compact summary in session state for use by the AI Assistant
+        try:
+            ml_summary = {
+                "best_model": str(best_name),
+                "best_rmse": float(best_rmse),
+                "best_r2": float(best_r2),
+                "best_confidence": float(best_confidence),
+                "target_days_ahead": int(days_ahead),
+                "target_date": prediction_date.strftime('%Y-%m-%d') if prediction_date else None,
+            }
+
+            # Capture final predicted price for each model (last day)
+            final_preds = {}
+            if future_predictions:
+                for name, pdata in future_predictions.items():
+                    preds = pdata.get('predictions', [])
+                    if preds:
+                        try:
+                            val = preds[-1]
+                            if hasattr(val, 'item'):
+                                val = val.item()
+                            final_preds[name] = float(val)
+                        except Exception:
+                            continue
+
+            ml_summary["final_predictions"] = final_preds
+            ml_summary["current_price"] = float(current_price)
+            # Top-line metrics per model
+            metrics = {}
+            for name, res in qualified_models.items():
+                try:
+                    metrics[name] = {
+                        "rmse": float(res.get('test_rmse', 0.0)),
+                        "r2": float(res.get('test_r2', 0.0)),
+                        "confidence": float(res.get('confidence', 0.0)),
+                    }
+                except Exception:
+                    continue
+
+            ml_summary["metrics"] = metrics
+            ml_summary["ensemble"] = {
+                "enabled": bool(ensemble_prediction and len(final_preds) > 1),
+                "price": float(ensemble_pred) if (ensemble_prediction and len(final_preds) > 1) else None,
+                "confidence": float(ensemble_confidence) if (ensemble_prediction and len(final_preds) > 1) else None,
+            }
+
+            # Persist under a consistent key
+            st.session_state["ml_context"] = ml_summary
+            st.session_state["ml_context_stock"] = str(stock_symbol)
+        except Exception:
+            # Non-fatal if we can't save context
+            pass
         
     except Exception as e:
         st.error(f"❌ Error in ML analysis: {str(e)}")

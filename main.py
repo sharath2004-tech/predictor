@@ -1,15 +1,25 @@
 # main.py - Main application file
+import os
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import timedelta, date
+from datetime import timedelta, date, datetime
+from pathlib import Path
+from dotenv import load_dotenv, dotenv_values
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # Import our custom modules
 from login import show_login_page, is_authenticated, get_current_user, logout
 from ml_predictor import show_ml_predictions, explain_ml_models, export_predictions
+from services.ollama_client import ollama_chat, essential_system_prompt
+from services.gemini_client import gemini_chat, DEFAULT_GEMINI_MODEL
+from services.openrouter_client import openrouter_chat, DEFAULT_OPENROUTER_MODEL
+
+load_dotenv()
+
+PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
 
 # ========================
 # App Configuration
@@ -176,6 +186,34 @@ def apply_main_styles():
         }
     </style>
     """, unsafe_allow_html=True)
+
+
+def _has_secret(var_name: str) -> bool:
+    """Return True if the environment or Streamlit secrets provide a non-empty value."""
+    try:
+        if hasattr(st, "secrets") and st.secrets.get(var_name):
+            return True
+    except Exception:
+        pass
+
+    env_val = os.getenv(var_name)
+    if env_val:
+        return True
+
+    # Fallback: read directly from a sibling .env file to support hot reloads
+    try:
+        env_path = Path(__file__).resolve().parent / ".env"
+        if env_path.exists():
+            values = dotenv_values(env_path)
+            candidate = values.get(var_name)
+            if candidate:
+                # Cache for subsequent checks without re-reading the file
+                os.environ.setdefault(var_name, candidate)
+                return True
+    except Exception:
+        pass
+
+    return False
 
 # ========================
 # Technical Indicators
@@ -358,6 +396,259 @@ def get_market_overview(tickers):
             continue
     return pd.DataFrame(overview_data)
 
+
+def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
+    """Assemble a concise context block for AI providers."""
+    if data.empty:
+        return f"Stock: {stock}\nNo price data available."
+
+    latest = data.iloc[-1]
+    context_lines = [f"Stock: {stock}"]
+
+    try:
+        last_close = float(latest.get("Close"))
+        context_lines.append(f"Latest close: ₹{last_close:.2f}")
+    except Exception:
+        pass
+
+    try:
+        prev_close = float(data["Close"].iloc[-2]) if len(data) > 1 else None
+        if prev_close:
+            change_pct = ((last_close - prev_close) / prev_close) * 100
+            context_lines.append(f"Daily change: {change_pct:+.2f}%")
+    except Exception:
+        pass
+
+    try:
+        high_52 = float(data["Close"].max())
+        low_52 = float(data["Close"].min())
+        context_lines.append(f"52-week range: ₹{low_52:.2f} - ₹{high_52:.2f}")
+    except Exception:
+        pass
+
+    try:
+        volume = int(latest.get("Volume"))
+        context_lines.append(f"Latest volume: {volume:,}")
+    except Exception:
+        pass
+
+    ml_ctx = st.session_state.get("ml_context")
+    if ml_ctx:
+        best_model = ml_ctx.get("best_model")
+        final_preds = ml_ctx.get("final_predictions") or {}
+        target_date = ml_ctx.get("target_date")
+        if final_preds:
+            summary_parts = []
+            for name, price in final_preds.items():
+                summary_parts.append(f"{name}: ₹{price:.2f}")
+            context_lines.append("AI predictions: " + ", ".join(summary_parts))
+        if best_model:
+            context_lines.append(f"Best model: {best_model} (confidence {ml_ctx.get('best_confidence', 0):.1f}%)")
+        if target_date:
+            context_lines.append(f"Prediction target date: {target_date}")
+
+    return "\n".join(context_lines)
+
+
+def build_trend_snapshot(tickers):
+    """Generate a lightweight market snapshot used by the FastAPI service."""
+    results = []
+    gainers = []
+    losers = []
+
+    for symbol in tickers:
+        data = get_stock_data(symbol, period="6mo")
+        if data.empty:
+            continue
+
+        close_series = data["Close"].astype(float)
+        try:
+            last_price = float(close_series.iloc[-1])
+        except Exception:
+            continue
+
+        def _pct_change(periods: int):
+            if len(close_series) <= periods:
+                return None
+            try:
+                prev = float(close_series.iloc[-(periods + 1)])
+                curr = float(close_series.iloc[-1])
+                if prev == 0:
+                    return None
+                return ((curr - prev) / prev) * 100
+            except Exception:
+                return None
+
+        d1 = _pct_change(1)
+        d5 = _pct_change(5)
+        d20 = _pct_change(20)
+
+        rsi_series = calculate_rsi(close_series, window=14)
+        rsi_val = float(rsi_series.iloc[-1]) if not rsi_series.empty else 50.0
+
+        _, _, ma20, ma50, _, _ = calculate_moving_averages(close_series)
+        try:
+            ma20_last = float(ma20.iloc[-1])
+            ma50_last = float(ma50.iloc[-1])
+            if last_price > ma20_last and ma20_last > ma50_last:
+                ma_state = "Bullish"
+            elif last_price < ma20_last and ma20_last < ma50_last:
+                ma_state = "Bearish"
+            else:
+                ma_state = "Neutral"
+        except Exception:
+            ma_state = "Neutral"
+
+        try:
+            vol_series = data["Volume"].astype(float)
+            vol_ratio = float(vol_series.iloc[-1]) / float(vol_series.tail(20).mean()) if len(vol_series) >= 20 else None
+        except Exception:
+            vol_ratio = None
+
+        last_date = data["Date"].iloc[-1]
+        try:
+            if isinstance(last_date, str):
+                last_dt = datetime.fromisoformat(last_date)
+            else:
+                last_dt = pd.to_datetime(last_date).to_pydatetime()
+        except Exception:
+            last_dt = datetime.utcnow()
+        stale = (datetime.utcnow() - last_dt).days > 2
+
+        record = {
+            "symbol": symbol,
+            "last": last_price,
+            "d1": d1,
+            "d5": d5,
+            "d20": d20,
+            "rsi14": rsi_val,
+            "ma_state": ma_state,
+            "vol_ratio": vol_ratio,
+            "stale": stale,
+        }
+
+        results.append(record)
+        if d1 is not None:
+            gainers.append(record)
+            losers.append(record)
+
+    gainers_sorted = sorted(gainers, key=lambda x: x.get("d1") or -999, reverse=True)[:3]
+    losers_sorted = sorted(losers, key=lambda x: x.get("d1") or 999)[:3]
+
+    summary_lines = []
+    if gainers_sorted:
+        summary_lines.append("Top gainers: " + ", ".join(f"{g['symbol']} {g['d1']:+.2f}%" for g in gainers_sorted if g.get("d1") is not None))
+    if losers_sorted:
+        summary_lines.append("Top losers: " + ", ".join(f"{l['symbol']} {l['d1']:+.2f}%" for l in losers_sorted if l.get("d1") is not None))
+
+    return {
+        "generated_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "summary_lines": summary_lines,
+        "tickers": results,
+    }
+
+
+def show_ai_insights(stock: str, data: pd.DataFrame):
+    """Render the AI assistant section allowing users to query different providers."""
+    st.markdown("---")
+    st.markdown('<h2 class="tech-header">🧠 AI Market Insights</h2>', unsafe_allow_html=True)
+
+    providers = ["Local Ollama", "OpenRouter", "Google Gemini"]
+    provider = st.selectbox("Model Provider", providers, key="ai_provider_select")
+
+    if provider == "Local Ollama":
+        models = ["mistral", "llama3", "nvidia/nemotron-nano-9b-v2:free"]
+        default_model = 0
+        helper_text = "Runs locally via Ollama. Ensure `ollama serve` is active."
+        key_available = True
+    elif provider == "OpenRouter":
+        models = [
+            "google/gemma-3-4b-it:free",
+            "meta-llama/llama-3.1-8b-instruct:free",
+            "anthropic/claude-3-haiku:beta",
+        ]
+        default_model = 0
+        helper_text = "Hosted models via OpenRouter. Requires OPENROUTER_API_KEY."
+        key_available = _has_secret("OPENROUTER_API_KEY")
+        if not key_available:
+            st.warning("⚠️ Add OPENROUTER_API_KEY to your .env or Streamlit secrets to use hosted models.")
+    else:
+        models = [DEFAULT_GEMINI_MODEL, "gemini-1.5-pro-latest", "learnlm-1.5-pro-experimental"]
+        default_model = 0
+        helper_text = "Uses Google Gemini API. Requires GEMINI_API_KEY."
+        key_available = _has_secret("GEMINI_API_KEY")
+        if not key_available:
+            st.warning("⚠️ Add GEMINI_API_KEY to your .env or Streamlit secrets to enable Gemini access.")
+
+    model_choice = st.selectbox("Model", models, index=default_model, key="ai_model_select", help=helper_text)
+
+    if "ai_history" not in st.session_state:
+        st.session_state["ai_history"] = []
+
+    question = st.text_area(
+        "Ask a question about the current stock",
+        value="Summarize the current trend and highlight key risks.",
+        height=120,
+        key="ai_question_text",
+    )
+
+    col_ask, col_clear = st.columns([3, 1])
+    ask_clicked = col_ask.button("🤖 Ask AI", type="primary", use_container_width=True)
+    clear_clicked = col_clear.button("🗑️ Clear Chat", use_container_width=True)
+
+    if clear_clicked:
+        st.session_state["ai_history"] = []
+
+    if ask_clicked:
+        if not question.strip():
+            st.warning("Please enter a question for the AI assistant.")
+        elif provider != "Local Ollama" and not key_available:
+            st.error("Missing API key for the selected provider. Update your configuration and try again.")
+        else:
+            context = _prepare_ai_context(stock, data)
+            user_prompt = f"{context}\n\nUser Question:\n{question.strip()}"
+            messages = [
+                {
+                    "role": "system",
+                    "content": essential_system_prompt + " Respond with clear bullet points. Always include a short disclaimer.",
+                },
+                {"role": "user", "content": user_prompt},
+            ]
+
+            with st.spinner("Contacting AI model..."):
+                if provider == "Local Ollama":
+                    answer = ollama_chat(
+                        messages,
+                        model=model_choice,
+                        host=os.getenv("OLLAMA_HOST"),
+                        timeout=90.0,
+                        temperature=0.2,
+                    )
+                elif provider == "OpenRouter":
+                    answer = openrouter_chat(
+                        messages,
+                        model=model_choice,
+                        temperature=0.2,
+                        timeout=90.0,
+                    )
+                else:
+                    answer = gemini_chat(messages, model=model_choice, timeout=90.0)
+
+            st.session_state["ai_history"].insert(0, {"question": question.strip(), "answer": answer, "provider": provider, "model": model_choice})
+            st.session_state["ai_history"] = st.session_state["ai_history"][:6]
+
+    if st.session_state["ai_history"]:
+        st.markdown("### Recent Conversations")
+        for exchange in st.session_state["ai_history"]:
+            with st.chat_message("user"):
+                st.markdown(exchange["question"])
+            with st.chat_message("assistant"):
+                answer_text = exchange["answer"]
+                if answer_text.startswith("AI error"):
+                    st.error(answer_text)
+                else:
+                    st.markdown(answer_text)
+
 # ========================
 # Main Application
 # ========================
@@ -403,6 +694,7 @@ def main_app():
         show_technical = st.checkbox("Technical Indicators", value=True)
         show_ml = st.checkbox("AI Predictions", value=True)
         show_overview = st.checkbox("Market Overview", value=True)
+        show_ai_chat = st.checkbox("AI Assistant", value=True)
         
         # Technical settings
         st.markdown("### ⚙️ Technical Settings")
@@ -533,36 +825,60 @@ def main_app():
                 st.error(f"Error calculating technical indicators: {str(e)}")
                 return
 
-            # Price chart with moving averages
+            # Price chart with moving averages (candlestick overlay)
             fig_price = go.Figure()
-            
-            # Candlestick chart
-            fig_price.add_trace(go.Candlestick(
-                x=data["Date"],
-                open=data["Open"],
-                high=data["High"],
-                low=data["Low"],
-                close=data["Close"],
-                name="Price",
-                increasing_line_color="#00ff88",
-                decreasing_line_color="#ff4757",
-                increasing_fillcolor="rgba(0, 255, 136, 0.3)",
-                decreasing_fillcolor="rgba(255, 71, 87, 0.3)"
-            ))
-            
-            # Add moving averages
+
+            # Add moving averages first
             colors = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4", "#feca57"]
             mas = [("MA5", ma_5), ("MA20", ma_20), ("MA50", ma_50), ("EMA12", ema_12), ("EMA26", ema_26)]
             
             for i, (name, ma_data) in enumerate(mas):
                 if not ma_data.empty:
                     fig_price.add_trace(go.Scatter(
-                        x=data["Date"], 
-                        y=ma_data, 
-                        name=name, 
-                        line=dict(color=colors[i % len(colors)], width=2),
-                        opacity=0.8
+                        x=data["Date"],
+                        y=ma_data,
+                        name=name,
+                        line=dict(color=colors[i % len(colors)], width=1.6),
+                        opacity=0.6,
+                        hovertemplate="%{x|%b %d, %Y}<br>%{y:.2f}<extra>" + name + "</extra>",
                     ))
+
+            def _column_to_series(column):
+                if isinstance(column, pd.DataFrame):
+                    column = column.iloc[:, 0]
+                return pd.to_numeric(column, errors="coerce")
+
+            open_series = _column_to_series(data["Open"])
+            high_series = _column_to_series(data["High"])
+            low_series = _column_to_series(data["Low"])
+            close_series = _column_to_series(data["Close"])
+
+            hover_text = [
+                f"Open: ₹{o:.2f}<br>High: ₹{h:.2f}<br>Low: ₹{l:.2f}<br>Close: ₹{c:.2f}"
+                for o, h, l, c in zip(open_series, high_series, low_series, close_series)
+            ]
+
+            # Candlestick chart (added last so it sits on top)
+            fig_price.add_trace(go.Candlestick(
+                x=data["Date"],
+                open=open_series,
+                high=high_series,
+                low=low_series,
+                close=close_series,
+                name="Price 🕯️",
+                increasing=dict(
+                    line=dict(color="#00ff88", width=1.8),
+                    fillcolor="rgba(0, 255, 136, 0.35)",
+                ),
+                decreasing=dict(
+                    line=dict(color="#ff4757", width=1.8),
+                    fillcolor="rgba(255, 71, 87, 0.35)",
+                ),
+                whiskerwidth=0.3,
+                opacity=0.92,
+                hoverinfo="x+text+name",
+                hovertext=hover_text,
+            ))
             
             fig_price.update_layout(
                 title=f"📊 {stock} - Price Chart with Moving Averages",
@@ -572,10 +888,14 @@ def main_app():
                 plot_bgcolor='rgba(0,0,0,0)',
                 paper_bgcolor='rgba(0,0,0,0)',
                 xaxis_title="Date",
-                yaxis_title="Price (₹)"
+                yaxis_title="Price (₹)",
+                hovermode="x unified",
+                hoverlabel=dict(bgcolor="#1a1a2e"),
+                legend=dict(traceorder="reversed"),
             )
+            fig_price.update_xaxes(type="date")
             
-            st.plotly_chart(fig_price, use_container_width=True)
+            st.plotly_chart(fig_price, config=PLOTLY_CONFIG)
             
             # RSI and MACD Analysis
             col1, col2 = st.columns([2, 1])
@@ -610,7 +930,7 @@ def main_app():
                     xaxis_title="Date",
                     yaxis_title="RSI"
                 )
-                st.plotly_chart(fig_rsi, use_container_width=True)
+                st.plotly_chart(fig_rsi, config=PLOTLY_CONFIG)
             
             with col2:
                 # RSI Signal Analysis
@@ -728,7 +1048,7 @@ def main_app():
                 paper_bgcolor='rgba(0,0,0,0)'
             )
             
-            st.plotly_chart(fig_macd, use_container_width=True)
+            st.plotly_chart(fig_macd, config=PLOTLY_CONFIG)
 
         # AI/ML Predictions Section
         if show_ml:
@@ -736,6 +1056,9 @@ def main_app():
             
             # Pass the prediction parameters to the ML function
             show_ml_predictions(data, stock, days_ahead, prediction_date, model_confidence)
+
+        if show_ai_chat:
+            show_ai_insights(stock, data)
 
         # Market Overview Section
         if show_overview:
