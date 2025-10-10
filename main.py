@@ -444,8 +444,93 @@ def search_tickers(query: str, limit: int = 12):
     return cleaned
 
 
-def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
-    """Assemble a concise context block for AI providers."""
+def extract_ticker_from_question(question: str) -> str:
+    """Extract stock ticker symbol from user question.
+    
+    Looks for common patterns like:
+    - Direct ticker mentions (e.g., "RELIANCE", "TSLA", "AAPL")
+    - Ticker with .NS suffix (e.g., "RELIANCE.NS")
+    - Words in uppercase that could be tickers
+    
+    Returns the first found ticker or empty string.
+    """
+    import re
+    
+    # Pattern 1: Look for tickers with exchange suffix (e.g., RELIANCE.NS, TSLA)
+    pattern_with_suffix = r'\b([A-Z]{2,10}\.[A-Z]{2})\b'
+    match = re.search(pattern_with_suffix, question)
+    if match:
+        return match.group(1)
+    
+    # Pattern 2: Look for standalone uppercase words (potential tickers)
+    # Filter out common words that aren't tickers
+    common_words = {'AI', 'ML', 'RSI', 'MACD', 'EMA', 'SMA', 'PE', 'API', 'US', 'UK', 'IN'}
+    pattern_uppercase = r'\b([A-Z]{2,10})\b'
+    matches = re.findall(pattern_uppercase, question)
+    for ticker in matches:
+        if ticker not in common_words:
+            return ticker
+    
+    return ""
+
+
+def fetch_current_stock_data(ticker: str):
+    """Fetch current price and recent historical data for a given ticker.
+    
+    Args:
+        ticker: Stock symbol (e.g., "RELIANCE.NS", "TSLA")
+    
+    Returns:
+        Dictionary with current price, volume, and change data, or None if fetch fails
+    """
+    try:
+        # Try to fetch recent data (2 days to get current and previous close)
+        stock_data = yf.download(ticker, period="2d", progress=False)
+        
+        if stock_data.empty or len(stock_data) < 1:
+            return None
+        
+        # Get current price info
+        current_val = stock_data["Close"].iloc[-1]
+        volume_val = stock_data["Volume"].iloc[-1]
+        
+        # Ensure scalar values
+        if hasattr(current_val, 'item'):
+            current_val = current_val.item()
+        if hasattr(volume_val, 'item'):
+            volume_val = volume_val.item()
+        
+        current_price = float(current_val)
+        volume = int(volume_val)
+        
+        # Calculate change if we have previous data
+        change_pct = None
+        if len(stock_data) >= 2:
+            previous_val = stock_data["Close"].iloc[-2]
+            if hasattr(previous_val, 'item'):
+                previous_val = previous_val.item()
+            previous_price = float(previous_val)
+            if previous_price > 0:
+                change_pct = ((current_price - previous_price) / previous_price) * 100
+        
+        return {
+            "ticker": ticker,
+            "current_price": current_price,
+            "volume": volume,
+            "change_pct": change_pct
+        }
+    except Exception as e:
+        return None
+
+
+def _prepare_ai_context(stock: str, data: pd.DataFrame, additional_ticker_data: dict = None) -> str:
+    """Assemble a concise context block for AI providers.
+    
+    Args:
+        stock: Primary stock symbol being analyzed
+        data: Historical data for the primary stock
+        additional_ticker_data: Optional data for an additional ticker mentioned in the question
+    """
     if data.empty:
         return f"Stock: {stock}\nNo price data available."
 
@@ -493,6 +578,15 @@ def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
             context_lines.append(f"Best model: {best_model} (confidence {ml_ctx.get('best_confidence', 0):.1f}%)")
         if target_date:
             context_lines.append(f"Prediction target date: {target_date}")
+
+    # Add additional ticker data if provided (from user question)
+    if additional_ticker_data:
+        context_lines.append("\n--- Additional Stock Data (from your question) ---")
+        context_lines.append(f"Stock: {additional_ticker_data['ticker']}")
+        context_lines.append(f"Current price: ₹{additional_ticker_data['current_price']:.2f}")
+        if additional_ticker_data['change_pct'] is not None:
+            context_lines.append(f"Daily change: {additional_ticker_data['change_pct']:+.2f}%")
+        context_lines.append(f"Volume: {additional_ticker_data['volume']:,}")
 
     return "\n".join(context_lines)
 
@@ -652,7 +746,20 @@ def show_ai_insights(stock: str, data: pd.DataFrame):
         elif provider != "Local Ollama" and not key_available:
             st.error("Missing API key for the selected provider. Update your configuration and try again.")
         else:
-            context = _prepare_ai_context(stock, data)
+            # Check if user is asking about a different ticker
+            additional_ticker_data = None
+            extracted_ticker = extract_ticker_from_question(question)
+            
+            # Only fetch additional data if ticker is different from current stock
+            if extracted_ticker and extracted_ticker.upper() != stock.upper():
+                with st.spinner(f"Fetching data for {extracted_ticker}..."):
+                    additional_ticker_data = fetch_current_stock_data(extracted_ticker)
+                    if not additional_ticker_data:
+                        # Try adding .NS suffix for Indian stocks if not found
+                        if not extracted_ticker.endswith('.NS'):
+                            additional_ticker_data = fetch_current_stock_data(f"{extracted_ticker}.NS")
+            
+            context = _prepare_ai_context(stock, data, additional_ticker_data)
             user_prompt = f"{context}\n\nUser Question:\n{question.strip()}"
             messages = [
                 {

@@ -211,7 +211,154 @@ Choose your analysis timeframe:
 
 ---
 
-### **Step 5: Making Trading Decisions**
+### **Step 5: AI Market Insights & Chatbot**
+
+#### **🧠 Using the AI Assistant**
+
+**Location:** AI Market Insights section (below ML predictions)
+
+The AI chatbot allows you to ask natural language questions about stocks and receive intelligent analysis powered by various AI models.
+
+##### **Features**
+
+1. **Multi-Provider Support:**
+   - **Local Ollama:** Run AI models locally (requires Ollama server)
+   - **OpenRouter:** Access hosted models (requires API key)
+   - **Google Gemini:** Use Google's AI models (requires API key)
+
+2. **Model Options:**
+   - **Ollama:** mistral, llama3, nvidia/nemotron-nano-9b-v2:free
+   - **OpenRouter:** Google Gemma, Meta Llama, Claude Haiku
+   - **Gemini:** Various Gemini models
+
+##### **Smart Ticker Detection**
+
+The chatbot can automatically detect and fetch data for any stock ticker mentioned in your question!
+
+**Supported Formats:**
+- `RELIANCE.NS` - Indian stocks with exchange suffix
+- `TSLA` - US stocks
+- `AAPL` - Any uppercase ticker symbol
+
+**Example Questions:**
+
+1. **Query about Different Stock:**
+   ```
+   "What's the current price of RELIANCE.NS?"
+   "How is TSLA performing today?"
+   "Compare the current stock with ICICIBANK"
+   ```
+   
+   **What happens:**
+   - Chatbot extracts the ticker (RELIANCE.NS, TSLA, ICICIBANK)
+   - Fetches real-time price and volume data
+   - Includes this data in the context for AI analysis
+   - AI provides insights based on both current and mentioned stock
+
+2. **General Analysis:**
+   ```
+   "Summarize the current trend and highlight key risks"
+   "What are the buy/sell signals for this stock?"
+   "Should I hold or sell based on current indicators?"
+   ```
+
+3. **Technical Questions:**
+   ```
+   "Explain the RSI value and what it means"
+   "What's the significance of the current MACD pattern?"
+   "Is the volume indicating a strong trend?"
+   ```
+
+##### **How It Works**
+
+1. **Ask Your Question:**
+   - Type your question in the text area
+   - Mention any ticker symbols you want to compare
+   - Click "🤖 Ask AI"
+
+2. **Automatic Data Fetch:**
+   - If you mention a different ticker, the system automatically:
+     - Extracts the ticker from your question
+     - Fetches current price, volume, and daily change
+     - For Indian stocks, tries adding .NS suffix if needed
+     - Shows a spinner: "Fetching data for TICKER..."
+
+3. **AI Analysis:**
+   - The AI receives context including:
+     - Current stock data (the one you're analyzing)
+     - Additional ticker data (if mentioned)
+     - Technical indicators (RSI, MACD, etc.)
+     - ML predictions (if available)
+   - Generates detailed analysis with bullet points
+   - Always includes a disclaimer about AI-generated content
+
+4. **Chat History:**
+   - Recent conversations are saved
+   - View up to 6 previous Q&A pairs
+   - Clear history with "🗑️ Clear Chat" button
+
+##### **Best Practices**
+
+1. **Be Specific:**
+   ```
+   ✅ Good: "Compare YESBANK.NS with PNB.NS current prices"
+   ❌ Vague: "Tell me about banks"
+   ```
+
+2. **Use Proper Ticker Format:**
+   ```
+   ✅ Correct: "RELIANCE.NS" or "TSLA"
+   ❌ Incorrect: "reliance" or "tesla"
+   ```
+
+3. **Combine with Technical Analysis:**
+   - First review charts and indicators
+   - Then ask AI for confirmation or additional insights
+   - Use AI as a second opinion, not sole decision maker
+
+##### **API Key Setup**
+
+To use OpenRouter or Google Gemini:
+
+1. **Create `.env` file** in project root
+2. **Add your API keys:**
+   ```env
+   OPENROUTER_API_KEY=sk-or-v1-your-key-here
+   GEMINI_API_KEY=your-gemini-key-here
+   ```
+3. **Restart the application**
+
+**Local Ollama Setup:**
+```bash
+# Install Ollama (if not installed)
+# Download from https://ollama.ai
+
+# Start Ollama server
+ollama serve
+
+# Pull a model
+ollama pull mistral
+```
+
+##### **Troubleshooting**
+
+1. **"Missing API key" error:**
+   - Add the required API key to `.env` file
+   - Or use Local Ollama (no API key needed)
+
+2. **Ticker not found:**
+   - Verify ticker format (use .NS for Indian stocks)
+   - Check if ticker symbol is correct
+   - Try searching the ticker first in the search box
+
+3. **Slow responses:**
+   - Local Ollama may be slower on first run
+   - OpenRouter/Gemini require internet connection
+   - Consider using smaller/faster models
+
+---
+
+### **Step 6: Making Trading Decisions**
 
 #### **🎯 Decision Framework**
 

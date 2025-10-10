@@ -26,6 +26,8 @@ Advanced Stock Predictor AI is a sophisticated machine learning-powered web appl
 - **Feature Engineering**: 20+ technical indicators and derived features
 - **Model Confidence Scoring**: Reliability metrics for each prediction
 - **Ensemble Predictions**: Combined model outputs for enhanced accuracy
+- **AI Market Insights**: Interactive chatbot with smart ticker detection for real-time stock queries
+- **Multi-Provider Support**: Local Ollama, OpenRouter, and Google Gemini integration
 
 ### 📈 **Technical Analysis Tools**
 - **RSI (Relative Strength Index)**: Momentum oscillator for overbought/oversold conditions
