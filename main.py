@@ -10,6 +10,7 @@ from dotenv import load_dotenv, dotenv_values
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import httpx
+from typing import Optional, List
 
 # Import our custom modules
 from login import show_login_page, is_authenticated, get_current_user, logout
@@ -22,6 +23,15 @@ load_dotenv()
 
 PLOTLY_CONFIG = {"displaylogo": False, "responsive": True}
 YAHOO_SEARCH_URL = "https://query2.finance.yahoo.com/v1/finance/search"
+
+HISTORICAL_WINDOW_LABELS = {
+    "1mo": "30-day",
+    "3mo": "90-day",
+    "6mo": "180-day",
+    "1y": "1-year",
+    "2y": "2-year",
+    "5y": "5-year",
+}
 
 # ========================
 # App Configuration
@@ -353,6 +363,19 @@ def get_stock_data(ticker, period="1y"):
         if data.empty:
             return pd.DataFrame()
         data.reset_index(inplace=True)
+
+        if isinstance(data.columns, pd.MultiIndex):
+            flattened = []
+            for col in data.columns:
+                if isinstance(col, tuple):
+                    primary = str(col[0]) if col[0] is not None else ""
+                    secondary = str(col[1]) if len(col) > 1 and col[1] is not None else ""
+                    name = primary if primary and primary != "None" else secondary
+                    flattened.append(name or "value")
+                else:
+                    flattened.append(str(col))
+            data.columns = flattened
+
         return data
     except Exception:
         return pd.DataFrame()
@@ -444,7 +467,302 @@ def search_tickers(query: str, limit: int = 12):
     return cleaned
 
 
-def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
+def _format_date_label(value) -> str:
+    try:
+        return pd.to_datetime(value).strftime("%Y-%m-%d")
+    except Exception:
+        return str(value)
+
+
+def _select_series(df: pd.DataFrame, target: str) -> Optional[pd.Series]:
+    if df is None or df.empty:
+        return None
+
+    columns = list(df.columns)
+
+    # Direct match
+    if target in df.columns:
+        result = df[target]
+    else:
+        result = None
+
+    if result is None:
+        for col in columns:
+            if isinstance(col, str) and col.lower() == target.lower():
+                result = df[col]
+                break
+
+    if result is None and isinstance(df.columns, pd.MultiIndex):
+        for col in columns:
+            if isinstance(col, tuple) and any(str(level).lower() == target.lower() for level in col):
+                result = df[col]
+                break
+    if result is None:
+        return None
+
+    if isinstance(result, pd.DataFrame):
+        if result.empty:
+            return None
+        result = result.iloc[:, 0]
+
+    if isinstance(result, pd.Series):
+        if result.empty:
+            return None
+        series = result.copy()
+        series.name = target
+        return series
+
+    return None
+
+
+def extract_dates_from_question(question: str) -> List[datetime.date]:
+    if not question:
+        return []
+
+    import re
+
+    normalized = (
+        question.replace("\u2011", "-")
+        .replace("\u2012", "-")
+        .replace("\u2013", "-")
+        .replace("\u2014", "-")
+        .replace("/", "-")
+    )
+
+    patterns = [
+        r"(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])",
+        r"(0[1-9]|[12]\d|3[01])\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-zA-Z]*\s+20\d{2}",
+    ]
+
+    results: List[datetime.date] = []
+
+    for pattern in patterns:
+        for match in re.findall(pattern, normalized, flags=re.IGNORECASE):
+            try:
+                if isinstance(match, tuple):
+                    if len(match) == 3 and match[0].isdigit():
+                        year, month, day = match
+                        parsed = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                    else:
+                        day, month_name, year = match
+                        parsed = datetime.strptime(f"{day} {month_name} {year}", "%d %b %Y")
+                    results.append(parsed.date())
+                else:
+                    year, month, day = match
+                    parsed = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                    results.append(parsed.date())
+            except Exception:
+                continue
+
+    if not results:
+        return []
+
+    seen = set()
+    deduped: List[datetime.date] = []
+    for item in results:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
+
+
+def build_date_specific_highlights(stock: str, data: pd.DataFrame, dates: List[datetime.date]) -> List[str]:
+    if not dates:
+        return []
+
+    try:
+        df = data.copy()
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+    except Exception:
+        df = pd.DataFrame()
+
+    highlights: List[str] = []
+    missing_dates: List[datetime.date] = []
+
+    for target in dates:
+        if df.empty:
+            missing_dates.append(target)
+            continue
+        mask = df["Date"] == pd.Timestamp(target)
+        if mask.any():
+            row = df.loc[mask].iloc[-1]
+            try:
+                close_val = float(row.get("Close"))
+                highlights.append(f"• {target.isoformat()}: ₹{close_val:.2f}")
+                continue
+            except Exception:
+                pass
+        missing_dates.append(target)
+
+    if missing_dates:
+        try:
+            extended = get_stock_data(stock, period="5y")
+            if not extended.empty:
+                extended["Date"] = pd.to_datetime(extended["Date"], errors="coerce")
+                for target in missing_dates:
+                    row = extended.loc[extended["Date"] == pd.Timestamp(target)]
+                    if not row.empty:
+                        try:
+                            close_val = float(row.iloc[-1].get("Close"))
+                            highlights.append(f"• {target.isoformat()}: ₹{close_val:.2f}")
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+    return highlights
+
+
+def build_historical_summary(stock: str, period: str) -> Optional[str]:
+    historical_data = get_stock_data(stock, period=period)
+    if historical_data.empty or len(historical_data) < 2:
+        return None
+
+    df = historical_data.copy()
+
+    close_series = _select_series(df, "Close")
+    if close_series is None:
+        close_series = _select_series(df, "Adj Close")
+    if close_series is None:
+        return None
+
+    df = df.assign(Close=close_series).dropna(subset=["Close"])
+    if df.empty or len(df) < 2:
+        return None
+
+    df.sort_values("Date", inplace=True)
+    start_row = df.iloc[0]
+    end_row = df.iloc[-1]
+
+    try:
+        start_price = float(start_row["Close"])
+        end_price = float(end_row["Close"])
+    except Exception:
+        return None
+
+    if not np.isfinite(start_price) or not np.isfinite(end_price) or start_price == 0:
+        return None
+
+    change_pct = ((end_price - start_price) / start_price) * 100.0
+
+    high_series = _select_series(df, "Close")
+    if high_series is None:
+        high_series = _select_series(df, "Adj Close")
+    low_series = high_series
+
+    window_high = float(high_series.max()) if high_series is not None else None
+    window_low = float(low_series.min()) if low_series is not None else None
+
+    volume_series_raw = _select_series(df, "Volume")
+    volume_series = pd.to_numeric(volume_series_raw, errors="coerce") if volume_series_raw is not None else pd.Series(dtype=float)
+    average_volume = float(volume_series.dropna().mean()) if not volume_series.dropna().empty else None
+
+    start_date = _format_date_label(start_row.get("Date"))
+    end_date = _format_date_label(end_row.get("Date"))
+    window_label = HISTORICAL_WINDOW_LABELS.get(period, period)
+
+    lines = [
+        f"{window_label} performance window ({start_date} → {end_date}):",
+        f"• Close: ₹{start_price:.2f} → ₹{end_price:.2f} ({change_pct:+.2f}%)",
+    ]
+
+    if window_high is not None and window_low is not None and np.isfinite(window_high) and np.isfinite(window_low):
+        lines.append(f"• High/Low closes: ₹{window_high:.2f} / ₹{window_low:.2f}")
+
+    if average_volume is not None and np.isfinite(average_volume):
+        lines.append(f"• Average daily volume: {average_volume:,.0f}")
+
+    return "\n".join(lines)
+
+
+def build_stock_comparison(primary: str, secondary: str, period: str) -> Optional[dict]:
+    primary_df = get_stock_data(primary, period=period)
+    secondary_df = get_stock_data(secondary, period=period)
+
+    if primary_df.empty or secondary_df.empty:
+        return None
+
+    df_primary = primary_df.copy()
+    df_secondary = secondary_df.copy()
+
+    primary_close = _select_series(df_primary, "Close")
+    if primary_close is None:
+        primary_close = _select_series(df_primary, "Adj Close")
+    secondary_close = _select_series(df_secondary, "Close")
+    if secondary_close is None:
+        secondary_close = _select_series(df_secondary, "Adj Close")
+
+    if primary_close is None or secondary_close is None:
+        return None
+
+    df_primary = df_primary.assign(Close_primary=primary_close).dropna(subset=["Close_primary"])
+    df_secondary = df_secondary.assign(Close_secondary=secondary_close).dropna(subset=["Close_secondary"])
+
+    if df_primary.empty or df_secondary.empty:
+        return None
+
+    df_primary["Date"] = pd.to_datetime(df_primary["Date"], errors="coerce")
+    df_secondary["Date"] = pd.to_datetime(df_secondary["Date"], errors="coerce")
+
+    merged = pd.merge(
+        df_primary[["Date", "Close_primary"]],
+        df_secondary[["Date", "Close_secondary"]],
+        on="Date",
+        how="inner",
+    ).dropna()
+
+    if merged.empty or len(merged) < 2:
+        return None
+
+    merged.sort_values("Date", inplace=True)
+    start_row = merged.iloc[0]
+    end_row = merged.iloc[-1]
+
+    try:
+        start_primary = float(start_row["Close_primary"])
+        end_primary = float(end_row["Close_primary"])
+        start_secondary = float(start_row["Close_secondary"])
+        end_secondary = float(end_row["Close_secondary"])
+    except Exception:
+        return None
+
+    if any(not np.isfinite(v) for v in [start_primary, end_primary, start_secondary, end_secondary]):
+        return None
+
+    if start_primary == 0 or start_secondary == 0:
+        return None
+
+    primary_change = ((end_primary - start_primary) / start_primary) * 100.0
+    secondary_change = ((end_secondary - start_secondary) / start_secondary) * 100.0
+    performance_gap = primary_change - secondary_change
+
+    start_date = _format_date_label(start_row["Date"])
+    end_date = _format_date_label(end_row["Date"])
+    window_label = HISTORICAL_WINDOW_LABELS.get(period, period)
+
+    lines = [
+        f"{window_label} comparison against {secondary}: ({start_date} → {end_date})",
+        f"• {primary}: ₹{start_primary:.2f} → ₹{end_primary:.2f} ({primary_change:+.2f}%)",
+        f"• {secondary}: ₹{start_secondary:.2f} → ₹{end_secondary:.2f} ({secondary_change:+.2f}%)",
+        f"• Performance gap (primary - secondary): {performance_gap:+.2f} percentage points",
+        f"• Latest close: {primary} ₹{end_primary:.2f} vs {secondary} ₹{end_secondary:.2f}",
+    ]
+
+    return {
+        "summary": "\n".join(lines),
+        "comparison_ticker": secondary,
+    }
+
+
+def _prepare_ai_context(
+    stock: str,
+    data: pd.DataFrame,
+    *,
+    historical_summary: Optional[str] = None,
+    comparison_summary: Optional[str] = None,
+    comparison_ticker: Optional[str] = None,
+    focus_date_highlights: Optional[List[str]] = None,
+) -> str:
     """Assemble a concise context block for AI providers."""
     if data.empty:
         return f"Stock: {stock}\nNo price data available."
@@ -452,32 +770,84 @@ def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
     latest = data.iloc[-1]
     context_lines = [f"Stock: {stock}"]
 
-    try:
-        last_close = float(latest.get("Close"))
-        context_lines.append(f"Latest close: ₹{last_close:.2f}")
-    except Exception:
-        pass
+    close_series = _select_series(data, "Close")
+    if close_series is None:
+        close_series = _select_series(data, "Adj Close")
+    volume_series = _select_series(data, "Volume")
 
-    try:
-        prev_close = float(data["Close"].iloc[-2]) if len(data) > 1 else None
-        if prev_close:
-            change_pct = ((last_close - prev_close) / prev_close) * 100
-            context_lines.append(f"Daily change: {change_pct:+.2f}%")
-    except Exception:
-        pass
+    if comparison_ticker:
+        context_lines.append(f"Secondary stock for comparison: {comparison_ticker}")
 
+    # Include the most recent trading date explicitly so models don't guess a stale value
+    latest_date: Optional[str] = None
     try:
-        high_52 = float(data["Close"].max())
-        low_52 = float(data["Close"].min())
-        context_lines.append(f"52-week range: ₹{low_52:.2f} - ₹{high_52:.2f}")
+        raw_date = latest.get("Date", data["Date"].iloc[-1])
+        if pd.isna(raw_date):
+            raw_date = data["Date"].dropna().iloc[-1]
+        timestamp = pd.to_datetime(raw_date)
+        latest_date = timestamp.strftime("%Y-%m-%d")
     except Exception:
-        pass
+        latest_date = None
 
-    try:
-        volume = int(latest.get("Volume"))
-        context_lines.append(f"Latest volume: {volume:,}")
-    except Exception:
-        pass
+    if latest_date:
+        context_lines.append(f"Latest trading day: {latest_date}")
+
+    last_close = None
+    prev_close = None
+
+    if close_series is not None:
+        numeric_close = pd.to_numeric(close_series, errors="coerce").dropna()
+        if not numeric_close.empty:
+            try:
+                last_close = float(numeric_close.iloc[-1])
+                context_lines.append(f"Latest close: ₹{last_close:.2f}")
+            except Exception:
+                last_close = None
+
+            if len(numeric_close) > 1:
+                try:
+                    prev_close = float(numeric_close.iloc[-2])
+                    if prev_close and last_close is not None:
+                        change_pct = ((last_close - prev_close) / prev_close) * 100
+                        context_lines.append(f"Daily change: {change_pct:+.2f}%")
+                except Exception:
+                    prev_close = None
+
+            try:
+                high_52 = float(numeric_close.max())
+                low_52 = float(numeric_close.min())
+                context_lines.append(f"52-week range: ₹{low_52:.2f} - ₹{high_52:.2f}")
+            except Exception:
+                pass
+
+            try:
+                date_series = pd.to_datetime(data.get("Date"), errors="coerce")
+                recent_df = pd.DataFrame({
+                    "date": date_series,
+                    "close": pd.to_numeric(close_series, errors="coerce"),
+                }).dropna().tail(8)
+                if not recent_df.empty:
+                    context_lines.append("")
+                    context_lines.append("Recent daily closes:")
+                    for _, row in recent_df.iterrows():
+                        context_lines.append(f"• {row['date'].strftime('%Y-%m-%d')}: ₹{row['close']:.2f}")
+            except Exception:
+                pass
+
+    if volume_series is not None and not volume_series.dropna().empty:
+        try:
+            volume = int(pd.to_numeric(volume_series, errors="coerce").dropna().iloc[-1])
+            context_lines.append(f"Latest volume: {volume:,}")
+        except Exception:
+            pass
+
+    if latest_date:
+        try:
+            start_date = pd.to_datetime(data["Date"].dropna().iloc[0]).strftime("%Y-%m-%d")
+            if start_date != latest_date:
+                context_lines.append(f"Data window: {start_date} → {latest_date}")
+        except Exception:
+            pass
 
     ml_ctx = st.session_state.get("ml_context")
     if ml_ctx:
@@ -493,6 +863,21 @@ def _prepare_ai_context(stock: str, data: pd.DataFrame) -> str:
             context_lines.append(f"Best model: {best_model} (confidence {ml_ctx.get('best_confidence', 0):.1f}%)")
         if target_date:
             context_lines.append(f"Prediction target date: {target_date}")
+
+    if historical_summary:
+        context_lines.append("")
+        context_lines.append("Historical context:")
+        context_lines.append(historical_summary)
+
+    if comparison_summary:
+        context_lines.append("")
+        context_lines.append("Comparison notes:")
+        context_lines.append(comparison_summary)
+
+    if focus_date_highlights:
+        context_lines.append("")
+        context_lines.append("Requested date closes:")
+        context_lines.extend(focus_date_highlights)
 
     return "\n".join(context_lines)
 
@@ -595,6 +980,13 @@ def build_trend_snapshot(tickers):
     }
 
 
+
+import re
+
+def extract_tickers_from_text(text):
+    # Simple regex for tickers: 1-5 uppercase letters, optionally with .NS, .AX, etc.
+    return re.findall(r'\b[A-Z]{1,5}(?:\.[A-Z]{1,3})?\b', text or "")
+
 def show_ai_insights(stock: str, data: pd.DataFrame):
     """Render the AI assistant section allowing users to query different providers."""
     st.markdown("---")
@@ -639,6 +1031,48 @@ def show_ai_insights(stock: str, data: pd.DataFrame):
         key="ai_question_text",
     )
 
+    window_options = list(HISTORICAL_WINDOW_LABELS.keys())
+    history_window = None
+    include_history = False
+    comparison_input = ""
+    comparison_window = None
+
+    window_format = lambda value: HISTORICAL_WINDOW_LABELS.get(value, value)
+
+    with st.expander("Advanced context options", expanded=False):
+        include_history = st.checkbox(
+            "Include historical comparison",
+            value=True,
+            key="ai_include_history_checkbox",
+            help="Adds a summarized lookback window so the model can contrast current data with past performance.",
+        )
+
+        if include_history and window_options:
+            default_index = window_options.index("3mo") if "3mo" in window_options else 0
+            history_window = st.selectbox(
+                "Historical window",
+                window_options,
+                index=default_index,
+                format_func=window_format,
+                key="ai_history_window_select",
+            )
+
+        comparison_input = st.text_input(
+            "Compare against another ticker (optional)",
+            key="ai_comparison_ticker_input",
+            help="Provide a second symbol to generate side-by-side stats before sending the prompt to the model.",
+        )
+
+        if comparison_input.strip() and window_options:
+            default_compare_index = window_options.index("3mo") if "3mo" in window_options else 0
+            comparison_window = st.selectbox(
+                "Comparison window",
+                window_options,
+                index=default_compare_index,
+                format_func=window_format,
+                key="ai_comparison_window_select",
+            )
+
     col_ask, col_clear = st.columns([3, 1])
     ask_clicked = col_ask.button("🤖 Ask AI", type="primary", use_container_width=True)
     clear_clicked = col_clear.button("🗑️ Clear Chat", use_container_width=True)
@@ -646,14 +1080,74 @@ def show_ai_insights(stock: str, data: pd.DataFrame):
     if clear_clicked:
         st.session_state["ai_history"] = []
 
+
     if ask_clicked:
         if not question.strip():
             st.warning("Please enter a question for the AI assistant.")
         elif provider != "Local Ollama" and not key_available:
             st.error("Missing API key for the selected provider. Update your configuration and try again.")
         else:
-            context = _prepare_ai_context(stock, data)
-            user_prompt = f"{context}\n\nUser Question:\n{question.strip()}"
+            requested_dates = extract_dates_from_question(question)
+            historical_summary = None
+            comparison_summary = None
+            comparison_symbol = None
+
+            # --- NEW: Extract tickers from question and fetch their data ---
+            tickers_in_question = extract_tickers_from_text(question)
+            ticker_data_summaries = []
+            for ticker in tickers_in_question:
+                ticker_df = get_stock_data(ticker, period="1mo")
+                if not ticker_df.empty:
+                    try:
+                        last_row = ticker_df.iloc[-1]
+                        price = last_row.get("Close")
+                        date_val = last_row.get("Date")
+                        price_str = f"₹{price:.2f}" if price is not None else "N/A"
+                        summary = f"Current price for {ticker} as of {date_val}: {price_str}"
+                        # Add 7-day trend if possible
+                        if len(ticker_df) >= 7:
+                            week_ago = ticker_df.iloc[-7]
+                            week_price = week_ago.get("Close")
+                            if week_price is not None and price is not None:
+                                change = ((price - week_price) / week_price) * 100
+                                summary += f" | 7-day change: {change:+.2f}%"
+                        ticker_data_summaries.append(summary)
+                    except Exception:
+                        continue
+
+            if include_history and history_window:
+                historical_summary = build_historical_summary(stock, history_window)
+                if not historical_summary:
+                    st.info(
+                        f"Not enough data available to include the {window_format(history_window)} window. Continuing without it."
+                    )
+                    historical_summary = None
+
+            comparison_symbol_input = comparison_input.strip().upper() if comparison_input else ""
+            if comparison_symbol_input:
+                comparison_period = comparison_window or history_window or "6mo"
+                comparison_payload = build_stock_comparison(stock, comparison_symbol_input, comparison_period)
+                if not comparison_payload:
+                    st.warning(
+                        f"Unable to prepare comparison insight for {comparison_symbol_input}. Double-check the ticker or try a shorter window."
+                    )
+                else:
+                    comparison_summary = comparison_payload["summary"]
+                    comparison_symbol = comparison_payload["comparison_ticker"]
+
+            date_specific_lines = build_date_specific_highlights(stock, data, requested_dates)
+
+            # --- NEW: Prepend ticker data summaries to context ---
+            ticker_info_block = "\n".join(ticker_data_summaries)
+            context = _prepare_ai_context(
+                stock,
+                data,
+                historical_summary=historical_summary,
+                comparison_summary=comparison_summary,
+                comparison_ticker=comparison_symbol,
+                focus_date_highlights=date_specific_lines,
+            )
+            user_prompt = f"{ticker_info_block}\n\n{context}\n\nUser Question:\n{question.strip()}" if ticker_info_block else f"{context}\n\nUser Question:\n{question.strip()}"
             messages = [
                 {
                     "role": "system",
@@ -833,6 +1327,57 @@ def main_app():
             st.error(f"❌ Unable to fetch data for {stock}. Please try another stock.")
             return
         
+        def extract_dates_from_question(question: str) -> List[datetime.date]:
+            if not question:
+                return []
+
+            import re
+
+            normalized = (
+                question.replace("\u2011", "-")
+                .replace("\u2012", "-")
+                .replace("\u2013", "-")
+                .replace("\u2014", "-")
+                .replace("/", "-")
+            )
+
+            patterns = [
+                r"(20\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])",
+                r"(0[1-9]|[12]\d|3[01])\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-zA-Z]*\s+20\d{2}",
+            ]
+
+            results: List[datetime.date] = []
+
+            for pattern in patterns:
+                for match in re.findall(pattern, normalized, flags=re.IGNORECASE):
+                    try:
+                        if isinstance(match, tuple):
+                            if len(match) == 3 and match[0].isdigit():
+                                year, month, day = match
+                                parsed = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                            else:
+                                day, month_name, year = match
+                                parsed = datetime.strptime(f"{day} {month_name} {year}", "%d %b %Y")
+                            results.append(parsed.date())
+                        else:
+                            year, month, day = match
+                            parsed = datetime.strptime(f"{year}-{month}-{day}", "%Y-%m-%d")
+                            results.append(parsed.date())
+                    except Exception:
+                        continue
+
+            if not results:
+                return []
+
+            seen = set()
+            deduped: List[datetime.date] = []
+            for item in results:
+                if item not in seen:
+                    seen.add(item)
+                    deduped.append(item)
+            return deduped
+
+
         # Current metrics
         current_price_val = data["Close"].iloc[-1]
         prev_price_val = data["Close"].iloc[-2] if len(data) > 1 else current_price_val
