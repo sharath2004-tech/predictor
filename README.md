@@ -5,8 +5,9 @@
 Advanced Stock Predictor AI is a sophisticated machine learning-powered web application built with Streamlit that provides real-time stock analysis, technical indicators, and AI-driven price predictions for Indian penny stocks. The application combines traditional technical analysis with cutting-edge machine learning algorithms to deliver comprehensive investment insights.
 
 ![Main Dashboard](https://img.shields.io/badge/Status-Active-brightgreen)
-![Python](https://img.shields.io/badge/Python-3.12.4-blue)
+![Python](https://img.shields.io/badge/Python-3.12.3-blue)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.32.0-red)
+![FastAPI](https://img.shields.io/badge/FastAPI-Latest-009688)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ## ✨ **Key Features**
@@ -18,6 +19,8 @@ Advanced Stock Predictor AI is a sophisticated machine learning-powered web appl
 - **Interactive Charts**: Dynamic, responsive visualizations with Plotly
 - **User Authentication**: Secure login system with demo and registered user support
 - **Market Overview**: Real-time market snapshot with key metrics
+- **REST API**: FastAPI endpoints for programmatic access to stock data and predictions
+- **AI Insights**: Multi-provider AI integration (Ollama, OpenRouter, Gemini, OpenAI) for intelligent market analysis
 
 ### 🤖 **AI & Machine Learning**
 - **Random Forest Regressor**: Ensemble learning for robust predictions
@@ -39,13 +42,18 @@ Advanced Stock Predictor AI is a sophisticated machine learning-powered web appl
 
 | Category | Technology | Version |
 |----------|------------|---------|
-| **Backend** | Python | 3.12.4 |
+| **Backend** | Python | 3.12.3 |
 | **Web Framework** | Streamlit | 1.32.0 |
+| **API Framework** | FastAPI | Latest |
 | **Data Processing** | Pandas | 2.2.2 |
 | **Numerical Computing** | NumPy | 1.26.4 |
 | **Machine Learning** | Scikit-learn | 1.4.2 |
 | **Data Visualization** | Plotly | 5.22.0 |
 | **Market Data** | yfinance | 0.2.65 |
+| **AI Integration** | OpenAI, Gemini, Ollama | Latest |
+| **HTTP Client** | httpx | Latest |
+| **PDF Generation** | ReportLab | 4.4.4 |
+| **Documentation** | LaTeX (research paper) | - |
 | **UI Styling** | Custom CSS | - |
 
 ## 📦 **Installation & Setup**
@@ -59,14 +67,22 @@ Advanced Stock Predictor AI is a sophisticated machine learning-powered web appl
 
 1. **Clone the Repository**
    ```bash
-   git clone https://github.com/yourusername/advanced-stock-predictor-ai.git
-   cd advanced-stock-predictor-ai
+   git clone https://github.com/sharath2004-tech/predictor.git
+   cd predictor
    ```
 
 2. **Create Virtual Environment**
+   
+   Using Conda:
    ```bash
    conda create -n stock-predictor python=3.12
    conda activate stock-predictor
+   ```
+   
+   Or using venv (Windows PowerShell):
+   ```powershell
+   python -m venv .venv
+   .venv\Scripts\Activate.ps1
    ```
 
 3. **Install Dependencies**
@@ -79,22 +95,58 @@ Advanced Stock Predictor AI is a sophisticated machine learning-powered web appl
    streamlit run main.py
    ```
 
-5. **Access the App**
-   Open your browser and navigate to `http://localhost:8504`
+5. **Configure Environment (Optional)**
+   ```bash
+   # Create .env file for AI provider API keys
+   OPENROUTER_API_KEY=your_key_here
+   GEMINI_API_KEY=your_key_here
+   OPENAI_API_KEY=your_key_here
+   OLLAMA_HOST=http://127.0.0.1:11434  # For local Ollama
+   ```
+
+6. **Access the App**
+   Open your browser and navigate to `http://localhost:8501`
 
 ## 🏗️ **Project Structure**
 
 ```
 📦 Advanced Stock Predictor AI
-├── 📄 main.py                 # Main Streamlit application
-├── 📄 ml_predictor.py         # Machine learning models and predictions
-├── 📄 login.py                # User authentication system
-├── 📄 requirements.txt        # Python dependencies
-├── 📄 README.md              # Project documentation
-├── 📁 .vscode/               # VS Code configuration
-│   └── 📄 settings.json      # Python interpreter settings
-├── 📁 .git/                  # Git repository
-└── 📁 .venv/                 # Virtual environment (if using venv)
+├── 📄 main.py                    # Main Streamlit application
+├── 📄 ml_predictor.py            # Machine learning models and predictions
+├── 📄 ml_predictor_fixed.py      # Optimized ML predictor implementation
+├── 📄 login.py                   # User authentication system
+├── 📄 api.py                     # FastAPI REST endpoints
+├── 📄 take_screenshots.py        # Screenshot automation utility
+├── 📄 requirements.txt           # Python dependencies
+├── 📄 README.md                  # Project documentation
+├── 📄 LICENSE                    # MIT license
+├── 📄 SECURITY.md                # Security policies
+├── 📁 services/                  # AI provider integrations
+│   ├── 📄 ollama_client.py      # Ollama local AI client
+│   ├── 📄 openrouter_client.py  # OpenRouter API client
+│   ├── 📄 gemini_client.py      # Google Gemini AI client
+│   └── 📄 openai_client.py      # OpenAI API client
+├── 📁 docs/                      # Documentation
+│   ├── 📄 README.md             # Documentation index
+│   ├── 📄 API_DOCUMENTATION.md   # API reference
+│   ├── 📄 DEPLOYMENT_GUIDE.md    # Deployment instructions
+│   ├── 📄 DEVELOPER_GUIDE.md     # Developer setup guide
+│   ├── 📄 SECURITY_GUIDE.md      # Security best practices
+│   ├── 📄 USER_GUIDE.md          # End-user manual
+│   └── 📄 FAQ_and_Features.pdf   # Comprehensive Q&A and features PDF
+├── 📁 research_paper/            # Academic research paper (LaTeX)
+│   ├── 📄 main.tex              # LaTeX source document
+│   ├── 📄 SASBEFRBDTSC.sty      # Custom LaTeX style file
+│   ├── 📄 references.bib        # BibTeX bibliography
+│   ├── 📄 references.ris        # RIS format references
+│   └── 📄 README.md             # Compilation instructions
+├── 📁 screenshots/               # Application screenshots
+├── 📁 scripts/                   # Utility scripts
+│   └── 📄 generate_faq_pdf.py   # PDF documentation generator
+├── 📁 .vscode/                   # VS Code configuration
+│   └── 📄 settings.json         # Python interpreter settings
+├── 📁 .git/                      # Git repository
+└── 📁 .venv/                     # Virtual environment
 ```
 
 ## 🎨 **Application Screenshots**
@@ -140,10 +192,13 @@ The application currently supports these Indian penny stocks:
 
 ### **Getting Started**
 1. **Launch the Application**: Run `streamlit run main.py`
-2. **Login**: Use demo credentials or register as a new user
+2. **Login**: 
+   - **Demo Mode**: Click "Try Demo Mode" for instant access (no registration required)
+   - **Firebase Auth**: Register with email/password for personalized experience
 3. **Select Stock**: Choose from the dropdown list of supported stocks
 4. **Configure Analysis**: Set technical indicator parameters and prediction settings
-5. **View Results**: Analyze charts, technical indicators, and AI predictions
+5. **View AI Insights**: Ask questions about stocks using integrated AI providers
+6. **View Results**: Analyze charts, technical indicators, and AI predictions
 
 ### **Key Features Walkthrough**
 
@@ -277,11 +332,39 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## 📚 **Documentation**
+
+### **Available Documentation**
+- **[API Documentation](docs/API_DOCUMENTATION.md)**: REST API endpoints and usage
+- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)**: Production deployment instructions
+- **[Developer Guide](docs/DEVELOPER_GUIDE.md)**: Setup and development workflow
+- **[Security Guide](docs/SECURITY_GUIDE.md)**: Security best practices
+- **[User Guide](docs/USER_GUIDE.md)**: End-user manual and tutorials
+- **[FAQ & Features PDF](docs/FAQ_and_Features.pdf)**: Comprehensive Q&A and unique features
+- **[Research Paper](research_paper/)**: Academic paper with LaTeX source
+
+### **Research Paper**
+A comprehensive academic research paper is available in the `research_paper/` directory, documenting:
+- System architecture and methodology
+- Machine learning model evaluation and results
+- Feature engineering and technical analysis approach
+- Performance metrics and validation
+- Complete LaTeX source with BibTeX references
+
+Compile the paper:
+```powershell
+cd research_paper
+pdflatex main.tex
+bibtex main
+pdflatex main.tex
+pdflatex main.tex
+```
+
 ## 📞 **Support & Contact**
 
-- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/yourusername/advanced-stock-predictor-ai/issues)
-- **Discussions**: Join the community discussions on [GitHub Discussions](https://github.com/yourusername/advanced-stock-predictor-ai/discussions)
-- **Documentation**: Visit our [Wiki](https://github.com/yourusername/advanced-stock-predictor-ai/wiki) for detailed guides
+- **Issues**: Report bugs or request features via [GitHub Issues](https://github.com/sharath2004-tech/predictor/issues)
+- **Discussions**: Join the community discussions on [GitHub Discussions](https://github.com/sharath2004-tech/predictor/discussions)
+- **Documentation**: Explore comprehensive guides in the `docs/` folder
 
 ## 🔮 **Roadmap**
 
@@ -292,6 +375,8 @@ SOFTWARE.
 - [ ] Portfolio optimization tools
 - [ ] Risk management dashboard
 - [ ] Mobile app development
+- [ ] Enhanced AI conversation history and context retention
+- [ ] Multi-stock portfolio comparison dashboard
 
 ### **Version 2.5 (Future)**
 - [ ] Multi-asset support (crypto, forex, commodities)
@@ -322,4 +407,45 @@ SOFTWARE.
 
 ---
 
-*Last updated: August 31, 2025*
+## 🔑 **API Integration**
+
+The application includes a FastAPI backend (`api.py`) with the following endpoints:
+
+- **GET /health**: Health check endpoint
+- **GET /stock/{symbol}**: Retrieve historical stock data
+- **GET /trends**: Get market trend analysis with AI insights
+- **GET /trends/simple**: Simplified trend snapshot
+- **POST /ask**: AI-powered query endpoint
+
+Run the API server:
+```bash
+uvicorn api:app --reload --port 8000
+```
+
+Access API docs at: `http://localhost:8000/docs`
+
+**Note**: The FastAPI server can run alongside the Streamlit app for programmatic access to stock data and predictions.
+
+## 🤖 **AI Provider Configuration**
+
+The system supports multiple AI providers for intelligent market analysis:
+
+### **Supported Providers**
+1. **Ollama** (Local): Free, privacy-focused, runs on your machine
+   - Install: [ollama.ai](https://ollama.ai)
+   - Run: `ollama run llama2` or your preferred model
+   
+2. **OpenRouter**: Access to multiple AI models via API
+   - Get API key: [openrouter.ai](https://openrouter.ai)
+   
+3. **Google Gemini**: Google's advanced AI models
+   - Get API key: [Google AI Studio](https://makersuite.google.com/app/apikey)
+   
+4. **OpenAI**: GPT models for analysis
+   - Get API key: [OpenAI Platform](https://platform.openai.com)
+
+Configure via `.env` file or Streamlit secrets.
+
+---
+
+*Last updated: November 14, 2025*
